@@ -44,6 +44,7 @@ default = [
   "bevy_sprite",
   "bevy_text",
   "bevy_ui",
+  "bevy_editor",
   "multi-threaded",
   "png",
   "hdr",
@@ -99,6 +100,9 @@ bevy_text = ["bevy_internal/bevy_text", "bevy_asset", "bevy_sprite"]
 
 # A custom ECS-driven UI framework
 bevy_ui = ["bevy_internal/bevy_ui", "bevy_core_pipeline", "bevy_text", "bevy_sprite"]
+
+# Developer tools to help with app creation
+bevy_editor = ["bevy_internal/bevy_editor"]
 
 # winit window and input backend
 bevy_winit = ["bevy_internal/bevy_winit"]
