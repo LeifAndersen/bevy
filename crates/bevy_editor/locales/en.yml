@@ -1,0 +1,5 @@
+_version: 1
+bevy_editor: "Bevy Editor"
+bevy_command_line_tool: "Bevy's command line tool"
+start_new_project: "Start new Bevy project"
+init_project_here: "Initialize new Bevy project here"

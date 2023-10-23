@@ -1,8 +1,13 @@
 [package]
 name = "bevy_editor"
+authors = ["Leif Andersen <leif@leif.pl>"]
 version = "0.0.0-dev"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+ansi_term = "0.12.1"
+anyhow = "1.0.75"
+clap = { version = "4.4.6", features = ["derive", "wrap_help", "string", "unicode"] }
+rust-i18n = "2.2.1"
