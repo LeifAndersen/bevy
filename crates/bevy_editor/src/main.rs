@@ -3,26 +3,25 @@ use clap::{Parser, Subcommand};
 use rust_i18n::t;
 use std::{error::Error, fs};
 
-rust_i18n::i18n!();
+mod localize;
+use localize::*;
 
-#[derive(Parser)]
-#[command(
-    name = t!("bevy_editor"),
-    author,
-    version,
-    about = t!("bevy_command_line_tool")
-)]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    #[command(about=t!("start_new_project"))]
-    New { name: String },
-    #[command(about=t!("init_project_here"))]
-    Init {},
+localize! {
+    #[derive(Parser)]
+    #[command(name = t!("bevy_editor"), author, version)]
+    /// bevy_command_line_tool
+    struct Cli {
+        #[command(subcommand)]
+        command: Commands,
+    }
+    
+    #[derive(Subcommand)]
+    enum Commands {
+        /// start_new_project
+        New { name: String },
+        /// init_project_here
+        Init {},
+    }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
