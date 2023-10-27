@@ -25,3 +25,4 @@ macro_rules! localize {
 
 pub(crate) use _localize_intern;
 pub(crate) use localize;
+pub(crate) use rust_i18n::t as t;
