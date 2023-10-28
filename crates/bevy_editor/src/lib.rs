@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use directories::ProjectDirs;
 use rust_i18n::t;
 use std::{env, fs, path::PathBuf};
 
@@ -37,6 +38,8 @@ enum Commands {
 enum TemplateCommands {
     #[command(about=t!("list_templates"))]
     List {},
+    #[command(about=t!("uninstall_template"))]
+    Uninstall{ template: String },
 }
 
 #[derive(Clone, PartialEq, Eq, ValueEnum)]
@@ -68,9 +71,9 @@ fn init_project(path: &PathBuf, opts: &ProjectOpts) -> Result<()> {
         Some(name) => name,
         None => path
             .file_name()
-            .context(t!("invalid_directory_name"))?
+            .context(t!("err_invalid_dir_name"))?
             .to_str()
-            .context(t!("invalid_directory_name"))?,
+            .context(t!("err_invalid_dir_name"))?,
     };
     let _license = if opts.license.is_empty() {
         vec![License::ApacheV2, License::Mit]
@@ -84,17 +87,41 @@ fn init_project(path: &PathBuf, opts: &ProjectOpts) -> Result<()> {
 
 /// Creates the given folder and calls `init_project` on that folder.
 fn new_project(path: &PathBuf, opts: &ProjectOpts) -> Result<()> {
-    fs::create_dir(&path).unwrap();
+    fs::create_dir(&path)?;
     init_project(path, opts)
 }
 
+/// Returns the path to the templates directory, creates it if it doesn't exist.
+fn templates_dir() -> Result<PathBuf> {
+    let dirs = ProjectDirs::from("org", "Bevy Engine", "Bevy").context(t!("err_no_data"))?;
+    let templates = dirs.data_dir().join("templates");
+    fs::create_dir_all(&templates)?;
+    Ok(templates)
+}
+
+/// Main entry point for the Bevy CLI.
 pub fn cli() -> Result<()> {
     let args = Cli::parse();
     match args.command {
         Commands::New { path, project_opts } => new_project(&PathBuf::from(&path), &project_opts)
             .with_context(|| format!("Could not create `{}`", &path)),
+
         Commands::Init { project_opts } => init_project(&env::current_dir()?, &project_opts)
             .with_context(|| format!("Could not initialize project")),
-        Commands::Templates { .. } => todo!(),
+
+        Commands::Templates { command } => match command {
+            TemplateCommands::List { .. } => {
+                println!("{}:\n", t!("installed_templates"));
+                for template in fs::read_dir(templates_dir()?)? {
+                    let template = template?;
+                    if template.path().is_dir() {
+                        println!("  🦀   {}", template.file_name().to_str().context("TODO")?);
+                    }
+                }
+                Ok(())
+            }
+            TemplateCommands::Uninstall { .. } => todo!()
+
+        },
     }
 }
