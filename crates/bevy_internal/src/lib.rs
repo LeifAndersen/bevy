@@ -194,3 +194,9 @@ pub mod dynamic_plugin {
     //! Dynamic linking of plugins
     pub use bevy_dynamic_plugin::*;
 }
+
+#[cfg(feature = "bevy_editor")]
+pub mod editor {
+    //! Interactive tools for developing bevy applications
+    pub use bevy_editor::*;
+}
