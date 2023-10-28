@@ -4,7 +4,7 @@ use directories::ProjectDirs;
 use prettytable::{format::FormatBuilder, row, Table};
 use rust_embed::RustEmbed;
 use rust_i18n::t;
-use std::{env, fs, io::Read, path::PathBuf};
+use std::{env, fs, fs::File, path::PathBuf, vec::Vec};
 use tera::Tera;
 
 rust_i18n::i18n!();
@@ -60,6 +60,16 @@ enum License {
     NoLicense,
 }
 
+impl ToString for License {
+    fn to_string(&self) -> String {
+        String::from(match self {
+            License::ApacheV2 => "Apache-2.0",
+            License::Mit => "MIT",
+            _ => "Other",
+        })
+    }
+}
+
 #[derive(Default, Args)]
 #[group(required = false, multiple = true)]
 struct ProjectOpts {
@@ -79,14 +89,18 @@ struct ProjectOpts {
 #[folder = "assets/default_template/"]
 struct DefaultTemplate;
 
-fn default_template() -> Result<Tera> {
+/// Returns a Tera object with the default template loaded.
+///
+/// Note that binary files are NOT loaded!
+fn default_template_tera() -> Result<Tera> {
     let mut tera = Tera::default();
     for filename in DefaultTemplate::iter() {
         let filename = filename.to_string();
         let file = DefaultTemplate::get(&filename)
             .with_context(|| format!("{}: {}", t!("err_no_read"), &filename))?;
-        let file = String::from_utf8(file.data.as_ref().to_vec())?;
-        tera.add_raw_template(&filename, &file)?;
+        if let Ok(file) = String::from_utf8(file.data.as_ref().to_vec()) {
+            tera.add_raw_template(&filename, &file)?;
+        }
     }
     Ok(tera)
 }
@@ -107,28 +121,53 @@ fn templates_dir() -> Result<PathBuf> {
 fn init_project(path: &PathBuf, opts: &ProjectOpts) -> Result<()> {
     // Complete and validate opts
     let mut ctx = tera::Context::new();
-    ctx.insert(
-        "name",
-        match &opts.name {
-            Some(name) => name as &str,
-            None => path
-                .file_name()
-                .context(t!("err_invalid_dir_name"))?
-                .to_str()
-                .context(t!("err_invalid_dir_name"))?,
-        },
-    );
-    let _license = if opts.license.is_empty() {
+    let name = match &opts.name {
+        Some(name) => name as &str,
+        None => path
+            .file_name()
+            .context(t!("err_invalid_dir_name"))?
+            .to_str()
+            .context(t!("err_invalid_dir_name"))?,
+    };
+    ctx.insert("name", name);
+    let license = if opts.license.is_empty() {
         vec![License::ApacheV2, License::Mit]
     } else if opts.license.contains(&License::NoLicense) {
         vec![]
     } else {
         opts.license.clone()
     };
-    let template = default_template()?;
-    for file in template.get_template_names() {
-        println!("File: {}", file);
-        println!("{}", template.render(file, &ctx)?);
+    ctx.insert(
+        "license",
+        &license
+            .iter()
+            .map(|x| x.to_string())
+            .collect::<Vec<String>>()
+            .join(" OR "),
+    );
+
+    // Pick appropriate template
+    let template = default_template_tera()?;
+
+    // Write files
+    for filename_str in template.get_template_names() {
+        let filename = path.join(filename_str);
+        let folder = filename
+            .parent()
+            .with_context(|| format!("{}: {}", t!("err_folder_for"), filename_str))?;
+        fs::create_dir_all(folder)?;
+        let mut file = File::create(filename)?;
+        template.render_to(filename_str, &ctx, &mut file)?;
+    }
+    for filename_str in DefaultTemplate::iter() {
+        let filename = path.join(filename_str.to_string());
+        let folder = filename
+            .parent()
+            .with_context(|| format!("{}: {}", t!("err_folder_for"), filename_str))?;
+        fs::create_dir_all(folder)?;
+        let file = DefaultTemplate::get(&filename_str)
+            .with_context(|| format!("{}: {}", t!("err_no_read"), &filename_str))?;
+        fs::write(filename, file.data)?;
     }
     Ok(())
 }
