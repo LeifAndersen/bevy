@@ -65,6 +65,7 @@ impl ToString for License {
         String::from(match self {
             License::ApacheV2 => "Apache-2.0",
             License::Mit => "MIT",
+            License::Cc0 => "CC0-1.0",
             _ => "Other",
         })
     }
@@ -84,6 +85,10 @@ struct ProjectOpts {
 //
 // Template Management
 //
+
+#[derive(RustEmbed)]
+#[folder = "assets/licenses/"]
+struct LicenseFles;
 
 #[derive(RustEmbed)]
 #[folder = "assets/default_template/"]
@@ -149,7 +154,7 @@ fn init_project(path: &PathBuf, opts: &ProjectOpts) -> Result<()> {
     // Pick appropriate template
     let template = default_template_tera()?;
 
-    // Write files
+    // Write template files
     for filename_str in template.get_template_names() {
         let filename = path.join(filename_str);
         let folder = filename
@@ -168,6 +173,15 @@ fn init_project(path: &PathBuf, opts: &ProjectOpts) -> Result<()> {
         let file = DefaultTemplate::get(&filename_str)
             .with_context(|| format!("{}: {}", t!("err_no_read"), &filename_str))?;
         fs::write(filename, file.data)?;
+        fs
+    }
+
+    // Write license files
+    for license in license {
+        let license = license.to_string();
+        let text = LicenseFles::get(&license)
+            .with_context(|| format!("{}: {}", t!("err_no_license"), license))?;
+        fs::write(path.join(format!("LICENSE-{}", license)), text.data)?;
     }
     Ok(())
 }
