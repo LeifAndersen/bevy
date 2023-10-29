@@ -4,8 +4,15 @@ use directories::ProjectDirs;
 use prettytable::{format::FormatBuilder, row, Table};
 use rust_embed::RustEmbed;
 use rust_i18n::t;
-use std::{env, fs, fs::File, path::PathBuf, vec::Vec};
+use std::{
+    env, fs,
+    fs::File,
+    io::{self, Read},
+    path::PathBuf,
+    vec::Vec,
+};
 use tera::Tera;
+use zip::ZipArchive;
 
 rust_i18n::i18n!();
 
@@ -118,6 +125,23 @@ fn templates_dir() -> Result<PathBuf> {
     Ok(templates)
 }
 
+/// Creates a tera object from the files in a template
+///
+/// Note that binary files are NOT loaded!
+fn template_zip_terra<T: io::Read + io::Seek>(zip: &mut ZipArchive<T>) -> Result<Tera> {
+    let mut tera = Tera::default();
+    for i in 0..zip.len() {
+        let mut file = zip.by_index(i)?;
+        let mut data = String::new();
+        if let Ok(_) = file.read_to_string(&mut data) {
+            let filename = file.enclosed_name().context(t!("err_no_read"))?;
+            let filename = filename.to_str().context(t!("err_no_read"))?;
+            tera.add_raw_template(filename, &data)?;
+        }
+    }
+    Ok(tera)
+}
+
 //
 // Project Management
 //
@@ -152,7 +176,14 @@ fn init_project(path: &PathBuf, opts: &ProjectOpts) -> Result<()> {
     );
 
     // Pick appropriate template
-    let template = default_template_tera()?;
+    let template = match &opts.template {
+        Some(template) => {
+            let tpath = templates_dir()?.join(format!("{}.zip", template));
+            let tfile = File::open(tpath).context(t!("err_no_template"))?;
+            template_zip_terra(&mut ZipArchive::new(tfile)?)?
+        }
+        None => default_template_tera()?,
+    };
 
     // Write template files
     for filename_str in template.get_template_names() {
@@ -164,16 +195,17 @@ fn init_project(path: &PathBuf, opts: &ProjectOpts) -> Result<()> {
         let mut file = File::create(filename)?;
         template.render_to(filename_str, &ctx, &mut file)?;
     }
-    for filename_str in DefaultTemplate::iter() {
-        let filename = path.join(filename_str.to_string());
-        let folder = filename
-            .parent()
-            .with_context(|| format!("{}: {}", t!("err_folder_for"), filename_str))?;
-        fs::create_dir_all(folder)?;
-        let file = DefaultTemplate::get(&filename_str)
-            .with_context(|| format!("{}: {}", t!("err_no_read"), &filename_str))?;
-        fs::write(filename, file.data)?;
-        fs
+    if let None = &opts.template { // TODO, also need to do this for explicit templates
+        for filename_str in DefaultTemplate::iter() {
+            let filename = path.join(filename_str.to_string());
+            let folder = filename
+                .parent()
+                .with_context(|| format!("{}: {}", t!("err_folder_for"), filename_str))?;
+            fs::create_dir_all(folder)?;
+            let file = DefaultTemplate::get(&filename_str)
+                .with_context(|| format!("{}: {}", t!("err_no_read"), &filename_str))?;
+            fs::write(filename, file.data)?;
+        }
     }
 
     // Write license files
@@ -209,7 +241,7 @@ pub fn cli() -> Result<()> {
                 table.set_format(FormatBuilder::new().padding(1, 1).build());
                 for template in fs::read_dir(templates_dir()?)? {
                     let template = template?;
-                    if template.path().is_dir() {
+                    if template.path().is_file() {
                         table.add_row(row!["🦀", template.file_name().to_str().context("TODO")?]);
                     }
                 }
