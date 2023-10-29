@@ -4,13 +4,7 @@ use directories::ProjectDirs;
 use prettytable::{format::FormatBuilder, row, Table};
 use rust_embed::RustEmbed;
 use rust_i18n::t;
-use std::{
-    env, fs,
-    fs::File,
-    io::{self, Read},
-    path::PathBuf,
-    vec::Vec,
-};
+use std::{env, fs, fs::File, io, io::Read, path::PathBuf, vec::Vec};
 use tera::Tera;
 use zip::ZipArchive;
 
@@ -50,6 +44,8 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum TemplateCommands {
+    #[command(about=t!("install_template"))]
+    Install { name: String },
     #[command(about=t!("list_templates"))]
     List {},
     #[command(about=t!("uninstall_template"))]
@@ -78,6 +74,21 @@ impl ToString for License {
     }
 }
 
+#[derive(Clone, PartialEq, Eq, ValueEnum)]
+enum ContinuousIntegration {
+    Github,
+    None,
+}
+
+impl ContinuousIntegration {
+    fn paths(&self) -> (PathBuf, PathBuf) {
+        match self {
+            ContinuousIntegration::Github => ("github".into(), ".github".into()),
+            _ => ("".into(), "".into()),
+        }
+    }
+}
+
 #[derive(Default, Args)]
 #[group(required = false, multiple = true)]
 struct ProjectOpts {
@@ -85,6 +96,8 @@ struct ProjectOpts {
     name: Option<String>,
     #[arg(long, short, help=t!("project_license"))]
     license: Vec<License>,
+    #[arg(long, short, help=t!("continuous_integration"))]
+    continuous_integration: Vec<ContinuousIntegration>,
     #[arg(long, short, help=t!("project_template"))]
     template: Option<String>,
 }
@@ -100,6 +113,10 @@ struct LicenseFles;
 #[derive(RustEmbed)]
 #[folder = "assets/default_template/"]
 struct DefaultTemplate;
+
+#[derive(RustEmbed)]
+#[folder = "assets/ci"]
+struct CIFiles;
 
 /// Returns a Tera object with the default template loaded.
 ///
@@ -142,6 +159,22 @@ fn template_zip_terra<T: io::Read + io::Seek>(zip: &mut ZipArchive<T>) -> Result
     Ok(tera)
 }
 
+/// Creates a tera object for all CI files.
+///
+/// Note: These are expected to be entirely text files.
+fn continuous_integration_tera() -> Result<Tera> {
+    let mut tera = Tera::default();
+    for filename in CIFiles::iter() {
+        let filename = filename.to_string();
+        let file = CIFiles::get(&filename)
+            .with_context(|| format!("{}: {}", t!("err_no_read"), &filename))?;
+        if let Ok(file) = String::from_utf8(file.data.as_ref().to_vec()) {
+            tera.add_raw_template(&filename, &file)?;
+        }
+    }
+    Ok(tera)
+}
+
 //
 // Project Management
 //
@@ -174,6 +207,16 @@ fn init_project(path: &PathBuf, opts: &ProjectOpts) -> Result<()> {
             .collect::<Vec<String>>()
             .join(" OR "),
     );
+    let continuous_integration = if opts.continuous_integration.is_empty() {
+        vec![ContinuousIntegration::Github]
+    } else if opts
+        .continuous_integration
+        .contains(&ContinuousIntegration::None)
+    {
+        vec![]
+    } else {
+        opts.continuous_integration.clone()
+    };
 
     // Pick appropriate template
     let template = match &opts.template {
@@ -195,7 +238,8 @@ fn init_project(path: &PathBuf, opts: &ProjectOpts) -> Result<()> {
         let mut file = File::create(filename)?;
         template.render_to(filename_str, &ctx, &mut file)?;
     }
-    if let None = &opts.template { // TODO, also need to do this for explicit templates
+    if let None = &opts.template {
+        // TODO, also need to do this for explicit templates
         for filename_str in DefaultTemplate::iter() {
             let filename = path.join(filename_str.to_string());
             let folder = filename
@@ -214,6 +258,21 @@ fn init_project(path: &PathBuf, opts: &ProjectOpts) -> Result<()> {
         let text = LicenseFles::get(&license)
             .with_context(|| format!("{}: {}", t!("err_no_license"), license))?;
         fs::write(path.join(format!("LICENSE-{}", license)), text.data)?;
+    }
+
+    // Write CI files
+    let ci_template = continuous_integration_tera()?;
+    for ci in continuous_integration {
+        let (ci, ci_path) = ci.paths();
+        for filename in ci_template.get_template_names() {
+            let filename_path = PathBuf::from(filename);
+            if filename_path.starts_with(&ci) {
+                let out_filename = path.join(&ci_path).join(filename_path.strip_prefix(&ci)?);
+                fs::create_dir_all(out_filename.parent().unwrap())?;
+                let mut file = File::create(out_filename)?;
+                ci_template.render_to(filename, &ctx, &mut file)?;
+            }
+        }
     }
     Ok(())
 }
@@ -248,6 +307,7 @@ pub fn cli() -> Result<()> {
                 table.printstd();
                 Ok(())
             }
+            TemplateCommands::Install { .. } => todo!(),
             TemplateCommands::Uninstall { .. } => todo!(),
         },
     }
