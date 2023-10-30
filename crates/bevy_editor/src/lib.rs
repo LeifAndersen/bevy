@@ -312,3 +312,51 @@ pub fn cli() -> Result<()> {
         },
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use assert_fs::prelude::*;
+    use predicates::prelude::*;
+
+    #[test]
+    fn test_default_init_project() {
+        let opts = ProjectOpts::default();
+        let tempdir = assert_fs::TempDir::new().unwrap();
+        let projdir = tempdir.path().join("bobgame");
+        assert!(new_project(&projdir, &opts).is_ok());
+        tempdir.child("bobgame").assert(predicate::path::is_dir());
+        tempdir
+            .child("bobgame")
+            .child(".github")
+            .assert(predicate::path::is_dir());
+        tempdir
+            .child("bobgame")
+            .child("LICENSE-Apache-2.0")
+            .assert(predicate::path::is_file());
+        tempdir
+            .child("bobgame")
+            .child("Cargo.toml")
+            .assert(predicate::path::is_file());
+    }
+
+    #[test]
+    fn test_no_extras() {
+        let opts = ProjectOpts {
+            license: vec![License::NoLicense],
+            continuous_integration: vec![ContinuousIntegration::None],
+            ..ProjectOpts::default()
+        };
+        let tempdir = assert_fs::TempDir::new().unwrap();
+        let projdir = tempdir.path().join("bobgame");
+        assert!(new_project(&projdir, &opts).is_ok());
+        tempdir
+            .child("bobgame")
+            .child(".github")
+            .assert(predicate::path::missing());
+        tempdir
+            .child("bobgame")
+            .child("LICENSE-Apache-2.0")
+            .assert(predicate::path::missing());
+    }
+}
