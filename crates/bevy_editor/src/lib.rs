@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use directories::ProjectDirs;
 use prettytable::{format::FormatBuilder, row, Table};
@@ -32,10 +32,12 @@ enum Commands {
     },
     #[command(about=t!("init_project_here"))]
     Init {
+        path: Option<String>,
+
         #[command(flatten)]
         project_opts: ProjectOpts,
     },
-    #[command(about=t!("manage_template"))]
+    #[command(about=t!("manage_templates"))]
     Templates {
         #[command(subcommand)]
         command: TemplateCommands,
@@ -134,10 +136,18 @@ fn default_template_tera() -> Result<Tera> {
     Ok(tera)
 }
 
+pub const BEVY_TEMPLATE_DIR: &str = "BEVY_TEMPLATE_DIR";
+
 /// Returns the path to the templates directory, creates it if it doesn't exist.
 fn templates_dir() -> Result<PathBuf> {
-    let dirs = ProjectDirs::from("org", "Bevy Engine", "Bevy").context(t!("err_no_data"))?;
-    let templates = dirs.data_dir().join("templates");
+    let templates = match env::var(BEVY_TEMPLATE_DIR) {
+        Ok(dir) => PathBuf::from(dir),
+        Err(_) => {
+            let dirs =
+                ProjectDirs::from("org", "Bevy Engine", "Bevy").context(t!("err_no_data"))?;
+            dirs.data_dir().join("templates")
+        }
+    };
     fs::create_dir_all(&templates)?;
     Ok(templates)
 }
@@ -149,11 +159,13 @@ fn template_zip_terra<T: io::Read + io::Seek>(zip: &mut ZipArchive<T>) -> Result
     let mut tera = Tera::default();
     for i in 0..zip.len() {
         let mut file = zip.by_index(i)?;
-        let mut data = String::new();
-        if let Ok(_) = file.read_to_string(&mut data) {
-            let filename = file.enclosed_name().context(t!("err_no_read"))?;
-            let filename = filename.to_str().context(t!("err_no_read"))?;
-            tera.add_raw_template(filename, &data)?;
+        if file.is_file() {
+            let mut data = String::new();
+            if let Ok(_) = file.read_to_string(&mut data) {
+                let filename = file.enclosed_name().context(t!("err_no_read"))?;
+                let filename = filename.to_str().context(t!("err_no_read"))?;
+                tera.add_raw_template(filename, &data)?;
+            }
         }
     }
     Ok(tera)
@@ -181,6 +193,12 @@ fn continuous_integration_tera() -> Result<Tera> {
 
 /// Creates a new project in the given directory.
 fn init_project(path: &PathBuf, opts: &ProjectOpts) -> Result<()> {
+
+    // Ensure current dir is empty
+    if fs::read_dir(path)?.count() != 0 {
+        bail!("{}: {}", t!("err_not_empty: {}"), path.to_string_lossy());
+    }
+
     // Complete and validate opts
     let mut ctx = tera::Context::new();
     let name = match &opts.name {
@@ -290,8 +308,15 @@ pub fn cli() -> Result<()> {
         Commands::New { path, project_opts } => new_project(&PathBuf::from(&path), &project_opts)
             .with_context(|| format!("Could not create `{}`", &path)),
 
-        Commands::Init { project_opts } => init_project(&env::current_dir()?, &project_opts)
-            .with_context(|| format!("Could not initialize project")),
+        Commands::Init { path, project_opts } => {
+            let proot = &env::current_dir()?;
+            let proot = match path {
+                Some(path) => proot.join(path),
+                None => proot.to_owned(),
+            };
+            init_project(&proot, &project_opts)
+                .with_context(|| format!("Could not initialize project"))
+        }
 
         Commands::Templates { command } => match command {
             TemplateCommands::List { .. } => {
@@ -358,5 +383,14 @@ mod test {
             .child("bobgame")
             .child("LICENSE-Apache-2.0")
             .assert(predicate::path::missing());
+    }
+
+    #[test]
+    fn test_build_zip_terra() {
+        let template_path = PathBuf::from("assets/tests/simple.zip");
+        let template = File::open(template_path).unwrap();
+        let mut archive = ZipArchive::new(template).unwrap();
+        let tera = template_zip_terra(&mut archive).unwrap();
+        assert_eq!(2, tera.get_template_names().count());
     }
 }
