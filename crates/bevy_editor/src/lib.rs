@@ -1,12 +1,16 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use directories::ProjectDirs;
 use prettytable::{format::FormatBuilder, row, Table};
 use rust_embed::RustEmbed;
 use rust_i18n::t;
-use std::{env, fs, fs::File, io, io::Read, path::PathBuf, vec::Vec};
+use std::{env, fs, fs::File, io::Read, path::PathBuf, vec::Vec};
 use tera::Tera;
+use templater::Templater;
+use toml_edit;
 use zip::ZipArchive;
+
+mod templater;
 
 rust_i18n::i18n!();
 
@@ -123,8 +127,8 @@ struct CIFiles;
 /// Returns a Tera object with the default template loaded.
 ///
 /// Note that binary files are NOT loaded!
-fn default_template_tera() -> Result<Tera> {
-    let mut tera = Tera::default();
+fn default_template_tera() -> Result<Templater> {
+    let mut tera = Templater::default();
     for filename in DefaultTemplate::iter() {
         let filename = filename.to_string();
         let file = DefaultTemplate::get(&filename)
@@ -136,7 +140,12 @@ fn default_template_tera() -> Result<Tera> {
     Ok(tera)
 }
 
+// Environment Variables:
 pub const BEVY_TEMPLATE_DIR: &str = "BEVY_TEMPLATE_DIR";
+pub const BEVY_ASSETS_REPO: &str = "BEVY_ASSETS_REPO";
+
+pub const DEFAULT_BEVY_ASSETS: &str =
+    "https://raw.githubusercontent.com/bevyengine/bevy-assets/main/Assets/Templates";
 
 /// Returns the path to the templates directory, creates it if it doesn't exist.
 fn templates_dir() -> Result<PathBuf> {
@@ -150,25 +159,6 @@ fn templates_dir() -> Result<PathBuf> {
     };
     fs::create_dir_all(&templates)?;
     Ok(templates)
-}
-
-/// Creates a tera object from the files in a template
-///
-/// Note that binary files are NOT loaded!
-fn template_zip_terra<T: io::Read + io::Seek>(zip: &mut ZipArchive<T>) -> Result<Tera> {
-    let mut tera = Tera::default();
-    for i in 0..zip.len() {
-        let mut file = zip.by_index(i)?;
-        if file.is_file() {
-            let mut data = String::new();
-            if let Ok(_) = file.read_to_string(&mut data) {
-                let filename = file.enclosed_name().context(t!("err_no_read"))?;
-                let filename = filename.to_str().context(t!("err_no_read"))?;
-                tera.add_raw_template(filename, &data)?;
-            }
-        }
-    }
-    Ok(tera)
 }
 
 /// Creates a tera object for all CI files.
@@ -187,13 +177,34 @@ fn continuous_integration_tera() -> Result<Tera> {
     Ok(tera)
 }
 
+fn _install_template(name: &str) -> Result<()> {
+    let asset_repo = match env::var(BEVY_ASSETS_REPO) {
+        Ok(repo) => repo,
+        Err(_) => String::from(DEFAULT_BEVY_ASSETS),
+    };
+    let mut response = reqwest::blocking::get(format!("{}/{}.toml", asset_repo, name))?;
+    let mut buf = String::new();
+    response.read_to_string(&mut buf)?;
+    let doc = buf.parse::<toml_edit::Document>()?;
+    let _reslink = doc
+        .get("link")
+        .context(t!("err_no_resource_link"))?
+        .as_str()
+        .context(t!("err_no_resource_link"))?;
+    Ok(())
+}
+
+#[test]
+fn test_install_template() {
+    assert!(_install_template("bevy-shell").is_ok());
+}
+
 //
 // Project Management
 //
 
 /// Creates a new project in the given directory.
 fn init_project(path: &PathBuf, opts: &ProjectOpts) -> Result<()> {
-
     // Ensure current dir is empty
     if fs::read_dir(path)?.count() != 0 {
         bail!("{}: {}", t!("err_not_empty: {}"), path.to_string_lossy());
@@ -241,7 +252,7 @@ fn init_project(path: &PathBuf, opts: &ProjectOpts) -> Result<()> {
         Some(template) => {
             let tpath = templates_dir()?.join(format!("{}.zip", template));
             let tfile = File::open(tpath).context(t!("err_no_template"))?;
-            template_zip_terra(&mut ZipArchive::new(tfile)?)?
+            Templater::from_zip(&mut ZipArchive::new(tfile)?)?
         }
         None => default_template_tera()?,
     };
@@ -255,19 +266,6 @@ fn init_project(path: &PathBuf, opts: &ProjectOpts) -> Result<()> {
         fs::create_dir_all(folder)?;
         let mut file = File::create(filename)?;
         template.render_to(filename_str, &ctx, &mut file)?;
-    }
-    if let None = &opts.template {
-        // TODO, also need to do this for explicit templates
-        for filename_str in DefaultTemplate::iter() {
-            let filename = path.join(filename_str.to_string());
-            let folder = filename
-                .parent()
-                .with_context(|| format!("{}: {}", t!("err_folder_for"), filename_str))?;
-            fs::create_dir_all(folder)?;
-            let file = DefaultTemplate::get(&filename_str)
-                .with_context(|| format!("{}: {}", t!("err_no_read"), &filename_str))?;
-            fs::write(filename, file.data)?;
-        }
     }
 
     // Write license files
@@ -383,14 +381,5 @@ mod test {
             .child("bobgame")
             .child("LICENSE-Apache-2.0")
             .assert(predicate::path::missing());
-    }
-
-    #[test]
-    fn test_build_zip_terra() {
-        let template_path = PathBuf::from("assets/tests/simple.zip");
-        let template = File::open(template_path).unwrap();
-        let mut archive = ZipArchive::new(template).unwrap();
-        let tera = template_zip_terra(&mut archive).unwrap();
-        assert_eq!(2, tera.get_template_names().count());
     }
 }
