@@ -62,25 +62,30 @@ impl Templater {
                 None => git2::TreeWalkResult::Abort,
             },
         )?;
-        /*
-        for i in tree.iter() {
-                let data = i.to_object(repo)?.as_blob().context("")?.content();
-                println!("{:?}", i.name().context("")?);
-            }
-        }
-        */
         Ok(tera)
     }
 
+    /// Adds a template of given name `name` to the templator.
+    ///
+    /// Note that if the name ends with .tera, it is assumed to be a tera file, and will 
+    /// be parsed as such. If you want a literal file to end with .tera, it will need
+    /// to have the extension .tera.tera.
     pub fn add_raw_template<T>(&mut self, name: &str, content: &T) -> Result<()>
     where
         Vec<u8>: From<T>,
         T: Clone,
     {
         let content: Vec<u8> = content.clone().into();
-        match String::from_utf8(content.clone()) {
-            Ok(file) => {
-                self.tera.add_raw_template(&name, &file)?;
+        match name.split_once(".tera") {
+            Some((name, "")) => {
+                match String::from_utf8(content.clone()) {
+                    Ok(file) => {
+                        self.tera.add_raw_template(&name, &file)?;
+                    }
+                    _ => {
+                        self.binaries.insert(String::from(name), content);
+                    }
+                };
             }
             _ => {
                 self.binaries.insert(String::from(name), content);
