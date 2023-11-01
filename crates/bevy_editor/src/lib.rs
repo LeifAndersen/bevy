@@ -97,6 +97,12 @@ impl ContinuousIntegration {
     }
 }
 
+#[derive(Clone, PartialEq, Eq, ValueEnum)]
+enum VersionControlSystem {
+    Git,
+    None,
+}
+
 #[derive(Default, Args)]
 #[group(required = false, multiple = true)]
 struct ProjectOpts {
@@ -108,6 +114,8 @@ struct ProjectOpts {
     continuous_integration: Vec<ContinuousIntegration>,
     #[arg(long, short, help=t!("project_template"))]
     template: Option<String>,
+    #[arg(long, help=t!("version_control_system"))]
+    vcs: Option<VersionControlSystem>,
 }
 
 //
@@ -256,6 +264,10 @@ fn init_project(path: &PathBuf, opts: &ProjectOpts) -> Result<()> {
     } else {
         opts.continuous_integration.clone()
     };
+    let vcs = match &opts.vcs {
+        Some(vcs) => vcs,
+        None => &VersionControlSystem::Git,
+    };
 
     // Pick appropriate template
     let template = match &opts.template {
@@ -301,11 +313,25 @@ fn init_project(path: &PathBuf, opts: &ProjectOpts) -> Result<()> {
             if filename_path.starts_with(&ci) {
                 let out_filename = path.join(&ci_path).join(filename_path.strip_prefix(&ci)?);
                 fs::create_dir_all(out_filename.parent().unwrap())?;
-                let mut file = File::create(out_filename)?;
-                ci_template.render_to(filename, &ctx, &mut file)?;
+                if let Ok(mut file) = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(out_filename)
+                {
+                    ci_template.render_to(filename, &ctx, &mut file)?;
+                }
             }
         }
     }
+
+    // Initialize version control.
+    match vcs {
+        VersionControlSystem::Git => {
+            git2::Repository::init(path)?;
+        }
+        VersionControlSystem::None => {}
+    }
+
     Ok(())
 }
 
