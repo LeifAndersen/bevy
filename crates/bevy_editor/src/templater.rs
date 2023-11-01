@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
+use git2::Repository;
 use std::{
     collections::HashMap,
     io,
     io::{Read, Write},
+    path::PathBuf,
 };
 use tera::Tera;
 use zip::ZipArchive;
@@ -39,6 +41,34 @@ impl Templater {
                 }
             }
         }
+        Ok(tera)
+    }
+
+    pub fn from_git(repo: &Repository) -> Result<Self> {
+        let mut tera = Templater::default();
+        let tree = repo.head()?.peel_to_tree()?;
+        tree.walk(
+            git2::TreeWalkMode::PreOrder,
+            |name, entry| match (|| -> Option<()> {
+                if let Some(git2::ObjectType::Blob) = entry.kind() {
+                    let path = PathBuf::from(name).join(entry.name().unwrap());
+                    let data = entry.to_object(repo).unwrap().peel_to_blob().unwrap();
+                    let data = data.content();
+                    tera.add_raw_template(&path.to_str()?, &data).ok()?;
+                }
+                Some(())
+            })() {
+                Some(_) => git2::TreeWalkResult::Ok,
+                None => git2::TreeWalkResult::Abort,
+            },
+        )?;
+        /*
+        for i in tree.iter() {
+                let data = i.to_object(repo)?.as_blob().context("")?.content();
+                println!("{:?}", i.name().context("")?);
+            }
+        }
+        */
         Ok(tera)
     }
 
@@ -85,7 +115,7 @@ impl Templater {
 
 #[cfg(test)]
 mod test {
-    use std::{path::PathBuf, fs::File};
+    use std::{fs::File, path::PathBuf};
 
     use super::*;
     #[test]

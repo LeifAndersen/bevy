@@ -1,12 +1,14 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use directories::ProjectDirs;
+use git2::Repository;
 use prettytable::{format::FormatBuilder, row, Table};
 use rust_embed::RustEmbed;
 use rust_i18n::t;
+use serde::Deserialize;
 use std::{env, fs, fs::File, io::Read, path::PathBuf, vec::Vec};
-use tera::Tera;
 use templater::Templater;
+use tera::Tera;
 use toml_edit;
 use zip::ZipArchive;
 
@@ -144,7 +146,7 @@ fn default_template_tera() -> Result<Templater> {
 pub const BEVY_TEMPLATE_DIR: &str = "BEVY_TEMPLATE_DIR";
 pub const BEVY_ASSETS_REPO: &str = "BEVY_ASSETS_REPO";
 
-pub const DEFAULT_BEVY_ASSETS: &str =
+const DEFAULT_BEVY_ASSETS_REPO: &str =
     "https://raw.githubusercontent.com/bevyengine/bevy-assets/main/Assets/Templates";
 
 /// Returns the path to the templates directory, creates it if it doesn't exist.
@@ -177,26 +179,34 @@ fn continuous_integration_tera() -> Result<Tera> {
     Ok(tera)
 }
 
-fn _install_template(name: &str) -> Result<()> {
+#[derive(Deserialize)]
+struct Asset {
+    name: String,
+    link: String,
+}
+
+fn install_template(name: &str) -> Result<Repository> {
+    let templates = templates_dir()?;
+
+    // Get Asset Location
     let asset_repo = match env::var(BEVY_ASSETS_REPO) {
         Ok(repo) => repo,
-        Err(_) => String::from(DEFAULT_BEVY_ASSETS),
+        Err(_) => String::from(DEFAULT_BEVY_ASSETS_REPO),
     };
     let mut response = reqwest::blocking::get(format!("{}/{}.toml", asset_repo, name))?;
     let mut buf = String::new();
     response.read_to_string(&mut buf)?;
-    let doc = buf.parse::<toml_edit::Document>()?;
-    let _reslink = doc
-        .get("link")
-        .context(t!("err_no_resource_link"))?
-        .as_str()
-        .context(t!("err_no_resource_link"))?;
-    Ok(())
-}
+    let doc = toml_edit::de::from_str::<Asset>(&buf)?;
 
-#[test]
-fn test_install_template() {
-    assert!(_install_template("bevy-shell").is_ok());
+    // Get the actual asset, or update it if its already installed.
+    let repo_path = templates.join(doc.name);
+    let repo = match Repository::open(&repo_path) {
+        Ok(repo) => repo, // TODO: update if already exists
+        Err(_) => git2::build::RepoBuilder::new()
+            .bare(true)
+            .clone(&doc.link, &repo_path)?,
+    };
+    Ok(repo)
 }
 
 //
@@ -250,9 +260,15 @@ fn init_project(path: &PathBuf, opts: &ProjectOpts) -> Result<()> {
     // Pick appropriate template
     let template = match &opts.template {
         Some(template) => {
-            let tpath = templates_dir()?.join(format!("{}.zip", template));
-            let tfile = File::open(tpath).context(t!("err_no_template"))?;
-            Templater::from_zip(&mut ZipArchive::new(tfile)?)?
+            let tdir = templates_dir()?;
+            match Repository::open(tdir.join(template)) {
+                Ok(repo) => Templater::from_git(&repo)?,
+                _ => {
+                    let tpath = templates_dir()?.join(format!("{}.zip", template));
+                    let tfile = File::open(tpath).context(t!("err_no_template"))?;
+                    Templater::from_zip(&mut ZipArchive::new(tfile)?)?
+                }
+            }
         }
         None => default_template_tera()?,
     };
@@ -323,14 +339,15 @@ pub fn cli() -> Result<()> {
                 table.set_format(FormatBuilder::new().padding(1, 1).build());
                 for template in fs::read_dir(templates_dir()?)? {
                     let template = template?;
-                    if template.path().is_file() {
-                        table.add_row(row!["🦀", template.file_name().to_str().context("TODO")?]);
-                    }
+                    table.add_row(row!["🦀", template.file_name().to_str().context("TODO")?]);
                 }
                 table.printstd();
                 Ok(())
             }
-            TemplateCommands::Install { .. } => todo!(),
+            TemplateCommands::Install { name } => {
+                install_template(&name)?;
+                Ok(())
+            }
             TemplateCommands::Uninstall { .. } => todo!(),
         },
     }
